@@ -1,4 +1,6 @@
 #include <IO/S3/copyS3File.h>
+#include <Common/UniqueLock.h>
+#include "base/defines.h"
 
 #if USE_AWS_S3
 
@@ -450,12 +452,12 @@ namespace
             if (!schedule)
                 return;
 
-            std::unique_lock lock(bg_tasks_mutex);
-            /// Suppress warnings because bg_tasks_mutex is actually hold, but tsa annotations do not understand std::unique_lock
-            bg_tasks_condvar.wait(lock, [this]() {return TSA_SUPPRESS_WARNING_FOR_READ(num_added_bg_tasks) == TSA_SUPPRESS_WARNING_FOR_READ(num_finished_bg_tasks); });
+            UniqueLock lock(bg_tasks_mutex);
+            bg_tasks_condvar.wait(
+                lock.getUnderlyingLock(),
+                [this] TSA_REQUIRES(bg_tasks_mutex) { return num_added_bg_tasks == num_finished_bg_tasks; });
 
-            auto exception = TSA_SUPPRESS_WARNING_FOR_READ(bg_exception);
-            if (exception)
+            if (bg_exception)
             {
                 /// abortMultipartUpload() might be called already, see processUploadPartRequest().
                 /// However if there were concurrent uploads at that time, those part uploads might or might not succeed.
@@ -463,11 +465,10 @@ namespace
                 /// all storage consumed by all parts.
                 abortMultipartUpload();
 
-                std::rethrow_exception(exception);
+                std::rethrow_exception(bg_exception);
             }
 
-            const auto & tasks = TSA_SUPPRESS_WARNING_FOR_READ(bg_tasks);
-            for (const auto & task : tasks)
+            for (const auto & task : bg_tasks)
                 part_tags.push_back(task.tag);
         }
     };

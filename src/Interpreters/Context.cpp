@@ -815,7 +815,8 @@ struct ContextSharedPart : boost::noncopyable
         LOG_TRACE(log, "Shutting down database catalog");
         DatabaseCatalog::shutdown([this]()
         {
-            SHUTDOWN(log, "system logs", TSA_SUPPRESS_WARNING_FOR_READ(system_logs), flushAndShutdown());
+            std::lock_guard lock(mutex);
+            SHUTDOWN(log, "system logs", system_logs, flushAndShutdown());
         });
 
         NamedCollectionFactory::instance().shutdown();
